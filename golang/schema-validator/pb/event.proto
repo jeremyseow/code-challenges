@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+// import "gogoproto/gogo.proto";
+
+option go_package = "/event";
+
+message ClientRequest {
+    string device_model = 1;
+    string os_type = 2;
+    repeated Event events = 3;
+}
+
+message Event {
+    string event_name = 1;
+    uint64 event_timestamp = 2;
+    map<string, DataValueOneOf> params_oneof = 3;
+    map<string, DataValueStruct> params_struct = 4;
+}
+
+message DataValueOneOf {
+  oneof kind {
+    string string_value = 1;
+    int64 int_value = 2;
+    bool bool_value = 3;
+    double double_value = 4;
+    StringArray string_array_value = 5;
+    IntArray int_array_value = 6;
+    BoolArray bool_array_value = 7;
+    DoubleArray double_array_value = 8;
+  }
+}
+
+message DataValueStruct {
+  optional string string_value = 1;
+  optional int64 int_value = 2;
+  optional bool bool_value = 3;
+  optional double double_value = 4;
+  StringArray string_array_value = 5;
+  IntArray int_array_value = 6;
+  BoolArray bool_array_value = 7;
+  DoubleArray double_array_value = 8;
+}
+
+message StringArray {
+  repeated string string_values = 1;
+}
+
+message IntArray {
+  repeated int64 int_values = 1;
+}
+
+message BoolArray {
+  repeated bool bool_values = 1;
+}
+
+message DoubleArray {
+  repeated double double_values = 1;
+}
+
