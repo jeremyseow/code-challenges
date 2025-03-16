@@ -11,46 +11,12 @@ import (
 
 func BenchmarkUnmarshalProtoJson(b *testing.B) {
 	jsonPayload := `{
-		"deviceModel":"xiaomi",
-		"osType":"android",
+		"device_model":"xiaomi",
+		"os_type":"android",
 		"events":[
 			{
-				"eventName":"event1",
-				"eventTimestamp":1234567890,
-				"params_oneof":{
-					"param1":{
-						"string_value":"hello"
-					},
-					"param2":{
-						"int_value":123
-					},
-					"param3":{
-						"bool_value":true
-					},
-					"param4":{
-						"double_value":123.45
-					},
-					"param5":{
-						"string_array_value": {
-							"string_values":["hello", "world"]
-						}
-					},
-					"param6":{
-						"int_array_value": {
-							"int_values":[1, 2, 3]
-						}
-					},
-					"param7":{
-						"bool_array_value": {
-							"bool_values":[true, false, true]
-						}
-					},
-					"param8":{
-						"double_array_value": {
-							"double_values":[1.1, 2.2, 3.3]
-						}
-					}
-				},
+				"event_name":"event1",
+				"event_timestamp":1234567890,
 				"params_struct":{
 					"param1":{
 						"string_value":"hello"
@@ -91,7 +57,7 @@ func BenchmarkUnmarshalProtoJson(b *testing.B) {
 
 	b.ResetTimer()
 
-	// BenchmarkUnmarshalProtoJson-16    	   36496	     31176 ns/op	    7952 B/op	     266 allocs/op
+	// BenchmarkUnmarshalProtoJson-16    	   65067	     16743 ns/op	    4536 B/op	     144 allocs/op
 	for i := 0; i < b.N; i++ {
 		var clientRequest event.ClientRequest
 		err := protojson.Unmarshal([]byte(jsonPayload), &clientRequest)
@@ -336,5 +302,102 @@ func BenchmarkUnmarshalProtoStruct(b *testing.B) {
 }
 
 func BenchmarkUnmarshalGoAny(b *testing.B) {
+	jsonPayload := `{
+		"device_model":"xiaomi",
+		"os_type":"android",
+		"events":[
+			{
+				"event_name":"event1",
+				"event_timestamp":12314567890,
+				"params_any":{
+					"param1": "hello",
+					"param2": 123,
+					"param3": true,
+					"param4": 123.45,
+					"param5": ["hello", "world"],
+					"param6": [1, 2, 3],
+					"param7": [true, false, true],
+					"param8": [1.1, 2.2, 3.3]
+				}
+			},
+			{
+				"event_name":"event2",
+				"event_timestamp":12314567890,
+				"params_any":{
+					"param1": "hello",
+					"param2": 123,
+					"param3": true,
+					"param4": 123.45,
+					"param5": ["hello", "world"],
+					"param6": [1, 2, 3],
+					"param7": [true, false, true],
+					"param8": [1.1, 2.2, 3.3]
+				}
+			}
+		]
+	}`
+
+	b.ResetTimer()
+
+	// BenchmarkUnmarshalGoAny-16    	  131049	      8652 ns/op	    5066 B/op	     167 allocs/op
+	for i := 0; i < b.N; i++ {
+		var clientRequestAny event.ClientRequestAny
+		err := jsoniter.Unmarshal([]byte(jsonPayload), &clientRequestAny)
+		if err != nil {
+			b.Fatal(err)
+		}
+
+		var clientRequest event.ClientRequest
+		clientRequest.DeviceModel = clientRequestAny.DeviceModel
+		clientRequest.OsType = clientRequestAny.OsType
+		clientRequest.Events = make([]*event.Event, len(clientRequestAny.Events))
+		for idx, evt := range clientRequestAny.Events {
+			clientRequest.Events[idx] = &event.Event{
+				EventName:      evt.EventName,
+				EventTimestamp: evt.EventTimestamp,
+				ParamsOneof:    make(map[string]*event.DataValueOneOf, len(evt.ParamsAny)),
+			}
+			for paramKey, paramValue := range evt.ParamsAny {
+				switch castedValue := paramValue.(type) {
+				case string:
+					clientRequest.Events[idx].ParamsOneof[paramKey] = &event.DataValueOneOf{
+						Kind: &event.DataValueOneOf_StringValue{StringValue: castedValue},
+					}
+				case int64:
+					clientRequest.Events[idx].ParamsOneof[paramKey] = &event.DataValueOneOf{
+						Kind: &event.DataValueOneOf_IntValue{IntValue: castedValue},
+					}
+				case bool:
+					clientRequest.Events[idx].ParamsOneof[paramKey] = &event.DataValueOneOf{
+						Kind: &event.DataValueOneOf_BoolValue{BoolValue: castedValue},
+					}
+				case float64:
+					clientRequest.Events[idx].ParamsOneof[paramKey] = &event.DataValueOneOf{
+						Kind: &event.DataValueOneOf_DoubleValue{DoubleValue: castedValue},
+					}
+				case []string:
+					clientRequest.Events[idx].ParamsOneof[paramKey] = &event.DataValueOneOf{
+						Kind: &event.DataValueOneOf_StringArrayValue{StringArrayValue: &event.StringArray{StringValues: castedValue}},
+					}
+				case []int64:
+					clientRequest.Events[idx].ParamsOneof[paramKey] = &event.DataValueOneOf{
+						Kind: &event.DataValueOneOf_IntArrayValue{IntArrayValue: &event.IntArray{IntValues: castedValue}},
+					}
+				case []bool:
+					clientRequest.Events[idx].ParamsOneof[paramKey] = &event.DataValueOneOf{
+						Kind: &event.DataValueOneOf_BoolArrayValue{BoolArrayValue: &event.BoolArray{BoolValues: castedValue}},
+					}
+				case []float64:
+					clientRequest.Events[idx].ParamsOneof[paramKey] = &event.DataValueOneOf{
+						Kind: &event.DataValueOneOf_DoubleArrayValue{DoubleArrayValue: &event.DoubleArray{DoubleValues: castedValue}},
+					}
+				default:
+					// fmt.Printf("Unsupported type: %T\n", paramValue)
+				}
+			}
+		}
+
+		// fmt.Println(&clientRequest)
+	}
 
 }
