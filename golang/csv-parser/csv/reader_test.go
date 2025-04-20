@@ -94,6 +94,38 @@ func TestRead(t *testing.T) {
 			expected:    nil,
 			err:         errWrongNumFields,
 		},
+		{
+			name:        "mix",
+			stringInput: "a,b,c\nd,e,\"\"\"f\"\"\"\ng,h,\"i\n\"",
+			delimiter:   ',',
+			excapeChar:  '"',
+			expected:    [][]string{{"a", "b", "c"}, {"d", "e", "\"f\""}, {"g", "h", "i\n"}},
+			err:         nil,
+		},
+		{
+			name:        "single field",
+			stringInput: "a",
+			delimiter:   ',',
+			excapeChar:  '"',
+			expected:    [][]string{{"a"}},
+			err:         nil,
+		},
+		{
+			name:        "whitespace",
+			stringInput: " ",
+			delimiter:   ',',
+			excapeChar:  '"',
+			expected:    [][]string{{" "}},
+			err:         nil,
+		},
+		{
+			name:       "empty",
+			filePath:   "data/test4.csv",
+			delimiter:  ',',
+			excapeChar: '"',
+			expected:   nil,
+			err:        nil,
+		},
 	}
 	for _, testCase := range testCases {
 		currTestCase := testCase
@@ -125,20 +157,21 @@ func TestRead(t *testing.T) {
 				input = nil
 			}
 
+			ocsvReader := ocsv.NewReader(input2)
+			ocsvReader.Comma = rune(currTestCase.delimiter)
+			recs, err2 := ocsvReader.ReadAll()
+			fmt.Println(currTestCase.name, recs)
+			if err2 != nil {
+				fmt.Println(currTestCase.name, err2)
+			}
+
 			csvReader := NewCsvReader(WithDelimiter(currTestCase.delimiter), WithEscapeChar(currTestCase.excapeChar))
 			records, err := csvReader.Read(input)
 			assert.True(t, errors.Is(err, currTestCase.err))
 			assert.Equal(t, currTestCase.expected, records)
 
-			ocsvReader := ocsv.NewReader(input2)
-			ocsvReader.Comma = rune(currTestCase.delimiter)
-			recs, err2 := ocsvReader.ReadAll()
 			if err != nil {
 				fmt.Println(currTestCase.name, err)
-			}
-
-			if err2 != nil {
-				fmt.Println(currTestCase.name, err2)
 			}
 
 			assert.Equal(t, currTestCase.expected, recs)
