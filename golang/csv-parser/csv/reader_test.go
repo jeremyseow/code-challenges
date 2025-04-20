@@ -1,12 +1,15 @@
 package csv
 
 import (
+	ocsv "encoding/csv"
+	"errors"
 	"fmt"
 	"io"
 	"os"
-	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestRead(t *testing.T) {
@@ -32,15 +35,15 @@ func TestRead(t *testing.T) {
 			filePath:   "data/test2.csv",
 			delimiter:  ',',
 			excapeChar: '"',
-			expected:   [][]string{{"1", "2", "\"\"3\"\""}, {"4", "5", "\n6"}, {"7", "8", "\",9\""}},
+			expected:   [][]string{{"1", "2", "\"3\""}, {"4", "5", "\n6"}, {"7", "8", "\",9\""}},
 			err:        nil,
 		},
 		{
-			name:       "different delimiter and escape character test",
+			name:       "different delimiter test",
 			filePath:   "data/test3.csv",
 			delimiter:  '-',
-			excapeChar: '|',
-			expected:   [][]string{{"1", "2", "3"}, {"4", "5", "6"}, {"7", "|8|", ",9"}},
+			excapeChar: '"',
+			expected:   [][]string{{"1", "2", "3"}, {"4", "5", "6"}, {"7", "\"8\"", ",9"}},
 			err:        nil,
 		},
 		{
@@ -56,16 +59,16 @@ func TestRead(t *testing.T) {
 			stringInput: "a\"a,b,c",
 			delimiter:   ',',
 			excapeChar:  '"',
-			expected:    [][]string{},
-			err:         errMismatchedQuotes,
+			expected:    nil,
+			err:         errUnexpectedEscapeChar,
 		},
 		{
 			name:        "quotes in the middle",
-			stringInput: "a\"a\"a,b,c",
+			stringInput: "a,b,c\na,b,c\n\"aa\"a,b,c",
 			delimiter:   ',',
 			excapeChar:  '"',
-			expected:    [][]string{},
-			err:         nil,
+			expected:    nil,
+			err:         errUnexpectedChar,
 		},
 		{
 			name:        "empty field",
@@ -75,14 +78,30 @@ func TestRead(t *testing.T) {
 			expected:    [][]string{{"", "", ""}},
 			err:         nil,
 		},
+		{
+			name:        "missing column",
+			stringInput: "a,b,c\nd,e",
+			delimiter:   ',',
+			excapeChar:  '"',
+			expected:    nil,
+			err:         errWrongNumFields,
+		},
+		{
+			name:        "missing column in the middle",
+			stringInput: "a,b\nd,e\nf,g,h",
+			delimiter:   ',',
+			excapeChar:  '"',
+			expected:    nil,
+			err:         errWrongNumFields,
+		},
 	}
 	for _, testCase := range testCases {
 		currTestCase := testCase
 		t.Run(currTestCase.name, func(t *testing.T) {
 			t.Parallel()
-			csvReader := NewCsvReader(WithDelimiter(currTestCase.delimiter), WithEscapeChar(currTestCase.excapeChar))
 
 			var input io.Reader
+			var input2 io.Reader
 			if currTestCase.filePath != "" {
 				file, err := os.Open(currTestCase.filePath)
 				if err != nil {
@@ -91,19 +110,38 @@ func TestRead(t *testing.T) {
 				}
 				defer file.Close()
 				input = file
+
+				file2, err := os.Open(currTestCase.filePath)
+				if err != nil {
+					fmt.Println("Error opening file:", err)
+					return
+				}
+				defer file2.Close()
+				input2 = file2
 			} else if currTestCase.stringInput != "" {
 				input = strings.NewReader(currTestCase.stringInput)
+				input2 = strings.NewReader(currTestCase.stringInput)
 			} else {
 				input = nil
 			}
 
+			csvReader := NewCsvReader(WithDelimiter(currTestCase.delimiter), WithEscapeChar(currTestCase.excapeChar))
 			records, err := csvReader.Read(input)
-			if err != currTestCase.err {
-				t.Errorf("expected error %v, got %v", currTestCase.err, err)
+			assert.True(t, errors.Is(err, currTestCase.err))
+			assert.Equal(t, currTestCase.expected, records)
+
+			ocsvReader := ocsv.NewReader(input2)
+			ocsvReader.Comma = rune(currTestCase.delimiter)
+			recs, err2 := ocsvReader.ReadAll()
+			if err != nil {
+				fmt.Println(currTestCase.name, err)
 			}
-			if !reflect.DeepEqual(records, currTestCase.expected) {
-				t.Errorf("expected records %v, got %v", currTestCase.expected, records)
+
+			if err2 != nil {
+				fmt.Println(currTestCase.name, err2)
 			}
+
+			assert.Equal(t, currTestCase.expected, recs)
 		})
 	}
 }

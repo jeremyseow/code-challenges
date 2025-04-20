@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 )
 
@@ -14,7 +15,10 @@ type CsvReader struct {
 }
 
 var (
-	errMismatchedQuotes = errors.New("mismatched quotes")
+	errMismatchedEscapeChar = errors.New("mismatched escape char")
+	errUnexpectedEscapeChar = errors.New("unexpected escape char")
+	errUnexpectedChar       = errors.New("unexpected char")
+	errWrongNumFields       = errors.New("wrong number of fields")
 )
 
 func NewCsvReader(options ...ReaderOption) *CsvReader {
@@ -32,70 +36,90 @@ func (c *CsvReader) Read(input io.Reader) ([][]string, error) {
 	var record []string
 	var field bytes.Buffer
 
-	inEscapeChar := false
-	quoteCount := 0
+	inQuotes := false
+	justClosedQuote := false
+	lineNum := 1
+	colNum := 0
+	expectedNumFields := 0
 
 	for {
 		ch, err := bufReader.ReadByte()
+		colNum++
 
-		// if we reach end of file and the line is well-formed, we should add the line
-		// to records as there was no new line.
 		if err == io.EOF {
-			if inEscapeChar {
-				return nil, errMismatchedQuotes
+			if inQuotes {
+				return nil, fmt.Errorf("%w at line %d, column %d", errMismatchedEscapeChar, lineNum, colNum)
 			}
-			record = append(record, field.String())
-
-			// skip empty line.
-			if len(record) > 0 {
+			if justClosedQuote || field.Len() > 0 || len(record) > 0 {
+				record = append(record, field.String())
+				if lineNum > 1 && len(record) != expectedNumFields {
+					return nil, fmt.Errorf("%w at line %d, expected %d, got %d", errWrongNumFields, lineNum, expectedNumFields, len(record))
+				}
 				records = append(records, record)
 			}
 			break
 		}
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("read error at line %d, column %d: %w", lineNum, colNum, err)
 		}
 
 		switch ch {
 		case c.escapeChar:
-			quoteCount++
-			nextCh, err := bufReader.Peek(1)
-
-			// if there are consecutive quotes, it means that it is being escaped.
-			if err == nil && nextCh[0] == c.escapeChar {
-				// consume next quote as well but we only write 1 quote to the current line buffer.
-				bufReader.ReadByte()
-				field.WriteByte(c.escapeChar)
+			peek, err := bufReader.Peek(1)
+			if inQuotes {
+				if err == nil && peek[0] == c.escapeChar {
+					// Escaped quote
+					bufReader.ReadByte()
+					colNum++
+					field.WriteByte(c.escapeChar)
+				} else {
+					// Possible closing quote
+					inQuotes = false
+					justClosedQuote = true
+				}
+			} else if field.Len() == 0 {
+				// Starting quoted field
+				inQuotes = true
+				justClosedQuote = false
 			} else {
-				// keeps track of whether we are in between quotes.
-				inEscapeChar = !inEscapeChar
+				return nil, fmt.Errorf("%w at line %d, column %d", errUnexpectedEscapeChar, lineNum, colNum)
 			}
 
 		case c.delimiter:
-			// if in between quote, then we should consider the delimiter.
-			if inEscapeChar {
+			if inQuotes {
 				field.WriteByte(ch)
-			} else {
+			} else if justClosedQuote || !inQuotes {
 				record = append(record, field.String())
 				field.Reset()
+				justClosedQuote = false
 			}
 
-		// in windows, new lines are \r\n instead of just \n. so here we are techincally
-		// skipping \r and wait for the next byte which will definitely be \n to
-		// append the field to record.
-		case '\r':
 		case '\n':
-			// this handles multiline items.
-			if inEscapeChar {
+			if inQuotes {
 				field.WriteByte(ch)
 			} else {
 				record = append(record, field.String())
 				field.Reset()
-				records = append(records, record)
+				if len(record) > 0 {
+					records = append(records, record)
+				}
+				if lineNum == 1 {
+					expectedNumFields = len(record)
+				}
 				record = []string{}
+				lineNum++
+				colNum = 0
+				justClosedQuote = false
 			}
+
+		case '\r':
+			// skip, wait for \n
+			continue
 
 		default:
+			if justClosedQuote {
+				return nil, fmt.Errorf("%w at line %d, column %d, char %c", errUnexpectedChar, lineNum, colNum, ch)
+			}
 			field.WriteByte(ch)
 		}
 	}
