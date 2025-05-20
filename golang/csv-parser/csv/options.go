@@ -13,9 +13,3 @@ func WithEscapeChar(escapeChar byte) ReaderOption {
 		reader.escapeChar = escapeChar
 	}
 }
-
-func WithHeader(hasHeader bool) ReaderOption {
-	return func(reader *CsvReader) {
-		reader.hasHeader = hasHeader
-	}
-}

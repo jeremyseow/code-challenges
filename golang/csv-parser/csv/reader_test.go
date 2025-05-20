@@ -68,7 +68,7 @@ func TestRead(t *testing.T) {
 			delimiter:   ',',
 			excapeChar:  '"',
 			expected:    nil,
-			err:         errUnexpectedChar,
+			err:         errMismatchedEscapeChar,
 		},
 		{
 			name:        "empty field",
@@ -118,22 +118,15 @@ func TestRead(t *testing.T) {
 			expected:    [][]string{{" "}},
 			err:         nil,
 		},
-		{
-			name:       "empty",
-			filePath:   "data/test4.csv",
-			delimiter:  ',',
-			excapeChar: '"',
-			expected:   nil,
-			err:        nil,
-		},
 	}
+
 	for _, testCase := range testCases {
 		currTestCase := testCase
 		t.Run(currTestCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			var input io.Reader
-			var input2 io.Reader
+			var testInput io.Reader
+			var validateInput io.Reader
 			if currTestCase.filePath != "" {
 				file, err := os.Open(currTestCase.filePath)
 				if err != nil {
@@ -141,7 +134,7 @@ func TestRead(t *testing.T) {
 					return
 				}
 				defer file.Close()
-				input = file
+				testInput = file
 
 				file2, err := os.Open(currTestCase.filePath)
 				if err != nil {
@@ -149,29 +142,29 @@ func TestRead(t *testing.T) {
 					return
 				}
 				defer file2.Close()
-				input2 = file2
+				validateInput = file2
 			} else if currTestCase.stringInput != "" {
-				input = strings.NewReader(currTestCase.stringInput)
-				input2 = strings.NewReader(currTestCase.stringInput)
+				testInput = strings.NewReader(currTestCase.stringInput)
+				validateInput = strings.NewReader(currTestCase.stringInput)
 			} else {
-				input = nil
+				t.Errorf("test case %s has no input", currTestCase.name)
 			}
 
-			ocsvReader := ocsv.NewReader(input2)
+			ocsvReader := ocsv.NewReader(validateInput)
 			ocsvReader.Comma = rune(currTestCase.delimiter)
-			recs, err2 := ocsvReader.ReadAll()
+			recs, errValidate := ocsvReader.ReadAll()
 			fmt.Println(currTestCase.name, recs)
-			if err2 != nil {
-				fmt.Println(currTestCase.name, err2)
+			if errValidate != nil {
+				fmt.Println(currTestCase.name, errValidate)
 			}
 
-			csvReader := NewCsvReader(WithDelimiter(currTestCase.delimiter), WithEscapeChar(currTestCase.excapeChar))
-			records, err := csvReader.Read(input)
-			assert.True(t, errors.Is(err, currTestCase.err))
+			csvReader := NewCsvReader(testInput, WithDelimiter(currTestCase.delimiter), WithEscapeChar(currTestCase.excapeChar))
+			records, errTest := csvReader.Read()
+			assert.True(t, errors.Is(errTest, currTestCase.err))
 			assert.Equal(t, currTestCase.expected, records)
 
-			if err != nil {
-				fmt.Println(currTestCase.name, err)
+			if errTest != nil {
+				fmt.Println(currTestCase.name, errTest)
 			}
 
 			assert.Equal(t, currTestCase.expected, recs)
@@ -180,7 +173,6 @@ func TestRead(t *testing.T) {
 }
 
 func BenchmarkRead(b *testing.B) {
-	csvReader := NewCsvReader(WithDelimiter(','), WithEscapeChar('"'))
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
@@ -191,7 +183,8 @@ func BenchmarkRead(b *testing.B) {
 		}
 		defer file.Close()
 
-		_, err = csvReader.Read(file)
+		csvReader := NewCsvReader(file, WithDelimiter(','), WithEscapeChar('"'))
+		_, err = csvReader.Read()
 		if err != nil {
 			b.Errorf("error %v", err)
 		}

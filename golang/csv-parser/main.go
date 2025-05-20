@@ -8,7 +8,6 @@ import (
 )
 
 func main() {
-	csvReader := csv.NewCsvReader(csv.WithDelimiter(','), csv.WithEscapeChar('"'))
 	file, err := os.Open("csv/data/test1.csv")
 	if err != nil {
 		fmt.Println("Error opening file:", err)
@@ -16,7 +15,8 @@ func main() {
 	}
 	defer file.Close()
 
-	records, err := csvReader.Read(file)
+	csvReader := csv.NewCsvReader(file, csv.WithDelimiter(','), csv.WithEscapeChar('"'))
+	records, err := csvReader.Read()
 	if err != nil {
 		fmt.Println(err)
 		return

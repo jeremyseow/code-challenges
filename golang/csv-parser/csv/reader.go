@@ -8,140 +8,168 @@ import (
 	"io"
 )
 
-type CsvReader struct {
-	delimiter  byte
-	escapeChar byte
-	hasHeader  bool
-}
-
 var (
 	errMismatchedEscapeChar = errors.New("mismatched escape char")
 	errUnexpectedEscapeChar = errors.New("unexpected escape char")
-	errUnexpectedChar       = errors.New("unexpected char")
 	errWrongNumFields       = errors.New("wrong number of fields")
 )
 
-func NewCsvReader(options ...ReaderOption) *CsvReader {
-	reader := &CsvReader{delimiter: ',', escapeChar: '"'}
-	for _, op := range options {
-		op(reader)
-	}
+type CsvReader struct {
+	delimiter  byte
+	escapeChar byte
 
-	return reader
+	reader      *bufio.Reader
+	readerState *readerState
 }
 
-func (c *CsvReader) Read(input io.Reader) ([][]string, error) {
-	// bufio reads or writes data in chunks rather than one byte at a time, which is more efficient.
-	bufReader := bufio.NewReader(input)
-	var records [][]string
-	var record []string
-	var field bytes.Buffer
+// readerState keeps track of the current state of the reader between reads
+type readerState struct {
+	lineNum             int
+	expectedNumOfFields int
+	escaping            bool
+	escaped             bool
+	field               bytes.Buffer
+	record              []string
+	records             [][]string
+}
 
-	// keep track of if the field is being escaped.
-	inEscapeChar := false
+func NewCsvReader(inputReader io.Reader, readerOptions ...ReaderOption) *CsvReader {
+	bufReader := bufio.NewReader(inputReader)
+	cr := &CsvReader{
+		delimiter:  ',',
+		escapeChar: '"',
+		reader:     bufReader,
+		readerState: &readerState{
+			lineNum:  1,
+			escaping: false,
+			escaped:  false,
+			field:    bytes.Buffer{},
+			record:   []string{},
+			records:  [][]string{},
+		},
+	}
 
-	// keep track of if we have escaped the entire field.
-	closedEscapeChar := false
-	lineNum := 1
-	colNum := 0
+	for _, op := range readerOptions {
+		op(cr)
+	}
 
-	// based on the 1st row, throw error if any row has a different number of fields.
-	expectedNumFields := 0
+	return cr
+}
 
+func (cr *CsvReader) Read() ([][]string, error) {
 	for {
-		ch, err := bufReader.ReadByte()
-		colNum++
+		ch, err := cr.reader.ReadByte()
 
+		// if end of file, append the last line and return
 		if err == io.EOF {
-			// if we are still escaping when we have reached the end, then we have a mismatched escape char.
-			if inEscapeChar {
-				return nil, fmt.Errorf("%w at line %d, column %d", errMismatchedEscapeChar, lineNum, colNum)
+			err := cr.appendLine()
+			if err != nil {
+				return nil, err
 			}
-			if field.Len() > 0 || len(record) > 0 {
-				record = append(record, field.String())
-
-				// if this is the only row, then we can skip the check. else we throw error if
-				// any row has a different number of fields.
-				if lineNum > 1 && len(record) != expectedNumFields {
-					return nil, fmt.Errorf("%w at line %d, expected %d, got %d", errWrongNumFields, lineNum, expectedNumFields, len(record))
-				}
-				records = append(records, record)
-			}
-			break
+			return cr.readerState.records, nil
 		}
+
 		if err != nil {
-			return nil, fmt.Errorf("read error at line %d, column %d: %w", lineNum, colNum, err)
+			return nil, err
 		}
 
 		switch ch {
-		case c.escapeChar:
-			// we want to check the next char without consuming it.
-			peek, err := bufReader.Peek(1)
-			if inEscapeChar {
-				// if we are escaping and we have a consecutive escape char, it means we are escaping it.
-				if err == nil && peek[0] == c.escapeChar {
-					// consume the next escape char but only write once.
-					bufReader.ReadByte()
-					colNum++
-					field.WriteByte(c.escapeChar)
-				} else {
-					// we have possible finished escape the field, but need to check if there are more
-					// chars after this escape char.
-					inEscapeChar = false
-					closedEscapeChar = true
-				}
-			} else if field.Len() == 0 {
-				// we are escaping the current field.
-				inEscapeChar = true
-				closedEscapeChar = false
-			} else {
-				// throw error for unexpected escape char.
-				return nil, fmt.Errorf("%w at line %d, column %d", errUnexpectedEscapeChar, lineNum, colNum)
-			}
-
-		case c.delimiter:
-			if inEscapeChar {
-				field.WriteByte(ch)
-			} else if closedEscapeChar || !inEscapeChar {
-				record = append(record, field.String())
-				field.Reset()
-				closedEscapeChar = false
-			}
-
-		// in windows, the new line is \r\n. we can just do nothing for \r and wait for the \n.
+		case cr.delimiter:
+			err = cr.handleDelimiter()
+		case cr.escapeChar:
+			err = cr.handleEscapeChar()
+		// in windows the newline is \r\n, so we can skip the \r and process the next byte which is the \n
 		case '\r':
 		case '\n':
-			// this is for multi-line fields.
-			if inEscapeChar {
-				field.WriteByte(ch)
-			} else {
-				record = append(record, field.String())
-				field.Reset()
-
-				// skip empty lines.
-				if len(record) > 0 {
-					records = append(records, record)
-				}
-
-				// set the expected number of fields based on the 1st row.
-				if lineNum == 1 {
-					expectedNumFields = len(record)
-				}
-
-				record = []string{}
-				lineNum++
-				colNum = 0
-				closedEscapeChar = false
-			}
-
+			err = cr.handleNewLine()
 		default:
-			// throw error if we have more chars after we are done escaping for the field.
-			if closedEscapeChar {
-				return nil, fmt.Errorf("%w at line %d, column %d, char %c", errUnexpectedChar, lineNum, colNum, ch)
-			}
-			field.WriteByte(ch)
+			err = cr.handleDefault(ch)
+		}
+
+		if err != nil {
+			return nil, err
 		}
 	}
+}
 
-	return records, nil
+func (cr *CsvReader) handleDelimiter() error {
+	if cr.readerState.escaping {
+		cr.readerState.field.WriteByte(cr.delimiter)
+		return nil
+	}
+
+	err := cr.appendField()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (cr *CsvReader) handleEscapeChar() error {
+	if cr.readerState.escaping {
+		nextCh, peakErr := cr.reader.Peek(1)
+		if peakErr == nil && nextCh[0] == cr.escapeChar {
+			cr.readerState.field.WriteByte(cr.escapeChar)
+			cr.reader.ReadByte()
+		} else {
+			cr.readerState.escaping = false
+			cr.readerState.escaped = true
+		}
+	} else if cr.readerState.field.Len() == 0 {
+		cr.readerState.escaping = true
+		cr.readerState.escaped = false
+	} else {
+		return fmt.Errorf("%w at line: %d", errUnexpectedEscapeChar, cr.readerState.lineNum)
+	}
+
+	return nil
+}
+
+func (cr *CsvReader) handleNewLine() error {
+	if cr.readerState.escaping {
+		cr.readerState.field.WriteByte('\n')
+		return nil
+	}
+	err := cr.appendLine()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (cr *CsvReader) handleDefault(ch byte) error {
+	if cr.readerState.escaped {
+		return fmt.Errorf("%w at line: %d", errMismatchedEscapeChar, cr.readerState.lineNum)
+	}
+
+	return cr.readerState.field.WriteByte(ch)
+}
+
+func (cr *CsvReader) appendField() error {
+	cr.readerState.record = append(cr.readerState.record, cr.readerState.field.String())
+	cr.readerState.field.Reset()
+
+	cr.readerState.escaping = false
+	cr.readerState.escaped = false
+
+	return nil
+}
+
+func (cr *CsvReader) appendLine() error {
+	cr.appendField()
+	if cr.readerState.lineNum == 1 {
+		cr.readerState.expectedNumOfFields = len(cr.readerState.record)
+	} else if len(cr.readerState.record) != cr.readerState.expectedNumOfFields {
+		return fmt.Errorf("%w at line: %d", errWrongNumFields, cr.readerState.lineNum)
+	}
+
+	cr.readerState.records = append(cr.readerState.records, cr.readerState.record)
+	cr.readerState.record = []string{}
+	cr.readerState.lineNum++
+
+	cr.readerState.escaping = false
+	cr.readerState.escaped = false
+	return nil
 }
